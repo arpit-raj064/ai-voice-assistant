@@ -12,7 +12,16 @@ Changes from previous version:
 import requests
 import json
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Ensure root and backend are in sys.path for direct module calls
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+if str(PROJECT_ROOT / "backend") not in sys.path:
+    sys.path.append(str(PROJECT_ROOT / "backend"))
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -127,7 +136,7 @@ TOOLS = [
 
 def handle_tool_call(tool_call) -> dict:
     """
-    Routes GPT's tool call to the correct backend API endpoint.
+    Routes GPT's tool call to the correct backend API endpoint or direct python logic.
     Returns result dict — GPT reads this and forms its reply.
     """
     name = tool_call.function.name
@@ -138,49 +147,72 @@ def handle_tool_call(tool_call) -> dict:
 
     try:
         if name == "check_availability":
-            r = requests.get(
-                f"{BACKEND_URL}/appointments/available-slots",
-                params=args,
-                timeout=5
-            )
-            return r.json()
+            try:
+                r = requests.get(
+                    f"{BACKEND_URL}/appointments/available-slots",
+                    params=args,
+                    timeout=2
+                )
+                return r.json()
+            except Exception as ex:
+                print(f"[TOOL HTTP FALLBACK] Using direct python engine for check_availability: {ex}")
+                try:
+                    from backend.scheduling.engine import get_available_slots
+                except ImportError:
+                    from scheduling.engine import get_available_slots
+                date = args.get("date", "")
+                slots = get_available_slots(date)
+                return {"date": date, "available_slots": slots, "total_available": len(slots)}
 
         elif name == "book_appointment":
-            r = requests.post(
-                f"{BACKEND_URL}/appointments/book",
-                json=args,
-                timeout=5
-            )
-            return r.json()
+            try:
+                r = requests.post(
+                    f"{BACKEND_URL}/appointments/book",
+                    json=args,
+                    timeout=3
+                )
+                return r.json()
+            except Exception as ex:
+                print(f"[TOOL HTTP FALLBACK] Using direct python logic for book_appointment: {ex}")
+                from backend.routes.appointments import book_appointment as direct_book
+                from backend.models.appointment import BookingRequest
+                req_obj = BookingRequest(**args)
+                res = direct_book(req_obj)
+                return res
 
         elif name == "cancel_booking":
-            r = requests.post(
-                f"{BACKEND_URL}/appointments/cancel",
-                json=args,
-                timeout=5
-            )
-            return r.json()
+            try:
+                r = requests.post(
+                    f"{BACKEND_URL}/appointments/cancel",
+                    json=args,
+                    timeout=3
+                )
+                return r.json()
+            except Exception as ex:
+                print(f"[TOOL HTTP FALLBACK] Using direct python logic for cancel_booking: {ex}")
+                from backend.routes.appointments import cancel_appointment as direct_cancel
+                from backend.models.appointment import CancelRequest
+                req_obj = CancelRequest(**args)
+                return direct_cancel(req_obj)
 
         elif name == "reschedule_appointment":
-            r = requests.post(
-                f"{BACKEND_URL}/appointments/reschedule",
-                json=args,
-                timeout=5
-            )
-            return r.json()
+            try:
+                r = requests.post(
+                    f"{BACKEND_URL}/appointments/reschedule",
+                    json=args,
+                    timeout=3
+                )
+                return r.json()
+            except Exception as ex:
+                print(f"[TOOL HTTP FALLBACK] Using direct python logic for reschedule_appointment: {ex}")
+                from backend.routes.appointments import reschedule_appointment as direct_reschedule
+                from backend.models.appointment import RescheduleRequest
+                req_obj = RescheduleRequest(**args)
+                return direct_reschedule(req_obj)
 
         else:
             print(f"[TOOL ERROR] Unknown tool: {name}")
             return {"error": f"Unknown tool: {name}"}
-
-    except requests.exceptions.ConnectionError:
-        print(f"[TOOL ERROR] Cannot connect to backend at {BACKEND_URL}")
-        print("Make sure FastAPI server is running: uvicorn main:app --reload")
-        return {"error": "Backend server not reachable. Is it running?"}
-
-    except requests.exceptions.Timeout:
-        print(f"[TOOL ERROR] Backend request timed out")
-        return {"error": "Backend took too long to respond"}
 
     except Exception as e:
         print(f"[TOOL ERROR] {e}")
