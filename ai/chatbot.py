@@ -21,16 +21,23 @@ from dotenv import load_dotenv
 # This finds ai-voice-assistant/.env  regardless of where you run the file from
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+# Ensure ai/ directory and project root are in sys.path
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 # ── Try importing the full agent (needs backend running) ──────────────────
-# If tools.py or agent.py have import errors, we catch them and fall back
 try:
-    from agent import get_ai_response
+    from ai.agent import get_ai_response
     FULL_AGENT = True
     print("[INFO] Full agent loaded — tool calling enabled")
-except ImportError as e:
-    FULL_AGENT = False
-    print(f"[INFO] Running in simple mode (agent import failed: {e})")
-    print("[INFO] This is fine for Week 1 — backend not needed yet\n")
+except ImportError:
+    try:
+        from agent import get_ai_response
+        FULL_AGENT = True
+        print("[INFO] Full agent loaded — tool calling enabled")
+    except ImportError as e:
+        FULL_AGENT = False
+        print(f"[INFO] Running in simple mode (agent import failed: {e})")
 
 # ── Simple fallback (Week 1 — no tools needed) ────────────────────────────
 # ── Simple fallback (Week 1 — no tools needed) ────────────────────────────
