@@ -261,6 +261,31 @@ ADAPTIVE (correct):
 """
 
 
+from datetime import datetime, timedelta
+
+def get_system_prompt() -> str:
+    now = datetime.now()
+    today_str = now.strftime("%A, %B %d, %Y")
+    today_iso = now.strftime("%Y-%m-%d")
+    tomorrow_iso = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    current_year = now.year
+
+    date_context = (
+        f"\n\n════════════════════════════════════════\n"
+        f"CURRENT LIVE SYSTEM TIME & DATE CONTEXT\n"
+        f"════════════════════════════════════════\n"
+        f"- TODAY IS: {today_str}\n"
+        f"- TODAY'S DATE (YYYY-MM-DD): {today_iso}\n"
+        f"- TOMORROW'S DATE (YYYY-MM-DD): {tomorrow_iso}\n"
+        f"- CURRENT YEAR: {current_year}\n\n"
+        f"CRITICAL DATE RESOLUTION RULES:\n"
+        f"1. When resolving relative dates like 'today', 'tomorrow', 'this Friday', or 'next week', ALWAYS calculate them relative to TODAY'S DATE ({today_iso}) and CURRENT YEAR ({current_year}).\n"
+        f"2. NEVER use past years (such as 2024 or 2025) under any circumstances.\n"
+        f"3. When passing date strings to tool calls (check_availability, book_appointment, reschedule_appointment), ALWAYS format as YYYY-MM-DD using year {current_year}.\n"
+    )
+    return SYSTEM_PROMPT + date_context
+
+
 # ── Core function — called by chatbot.py in full agent mode ───────────────
 def get_ai_response(conversation_history: list) -> str:
     """
@@ -273,12 +298,13 @@ def get_ai_response(conversation_history: list) -> str:
     Returns:
         AI reply string (clean text, ready to speak or print)
     """
-    model_name = os.getenv("GROQ_LLM_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    model_name = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+    system_prompt = get_system_prompt()
     
     # ── First Groq call — may return a tool call or a direct reply ─────────
     response = client.chat.completions.create(
         model        = model_name,
-        messages     = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages     = [{"role": "system", "content": system_prompt}]
                        + conversation_history,
         tools        = TOOLS,
         tool_choice  = "auto",    # Groq decides when to use a tool
@@ -310,7 +336,7 @@ def get_ai_response(conversation_history: list) -> str:
         # ── Second Groq call — forms the final reply using tool result ─────
         final = client.chat.completions.create(
             model      = model_name,
-            messages   = [{"role": "system", "content": SYSTEM_PROMPT}]
+            messages   = [{"role": "system", "content": system_prompt}]
                          + conversation_history,
             temperature= 0.7,
         )

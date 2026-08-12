@@ -268,4 +268,4 @@ if __name__ == "__main__":
             print("  1. Accept Orpheus model terms at console.groq.com")
             print("  2. Check GROQ_API_KEY in .env")
             print("  3. Check internet connection")
-            print("  4. Free tier limit: 100 requests/day — may be exhausted")"""
+            print("  4. Free tier limit: 100 requests/day — may be exhausted")
