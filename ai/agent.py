@@ -12,10 +12,18 @@ The difference from chatbot.py's simple fallback:
   - Responses are backed by real database data via Sameer's backend
 """
 
+import os, sys, json
 from groq import Groq
 from dotenv import load_dotenv
-import os, json
-from tools import TOOLS, handle_tool_call
+
+# Ensure ai/ directory and project root are in sys.path for IDE and runtime compatibility
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    from ai.tools import TOOLS, handle_tool_call
+except ImportError:
+    from tools import TOOLS, handle_tool_call
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
