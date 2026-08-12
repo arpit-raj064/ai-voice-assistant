@@ -189,7 +189,7 @@ async def process_speech(
             speech_timeout= "auto",
             speech_model  = "phone_call",
             language      = FALLBACK_LANG,
-            timeout       = 8,
+            timeout       = 5,
         )
         if reply_audio_url:
             gather.play(reply_audio_url)
@@ -197,31 +197,8 @@ async def process_speech(
             gather.say(ai_reply, voice=FALLBACK_VOICE, language=FALLBACK_LANG)
         response.append(gather)
 
-        # Handle silence after playing the reply
-        silence_warning = "I apologise — I'm having a little trouble hearing you. Are you still there?"
-        warning_audio = await text_to_speech_url(silence_warning)
-        if warning_audio:
-            response.play(warning_audio)
-        else:
-            response.say(silence_warning, voice=FALLBACK_VOICE)
-            
-        gather2 = Gather(
-            input         = "speech",
-            action        = "/voice/process-speech",
-            method        = "POST",
-            speech_timeout= "auto",
-            language      = FALLBACK_LANG,
-            timeout       = 5,
-        )
-        response.append(gather2)
-        
-        goodbye_text = "It seems like we may have lost the connection. Please feel free to call us back anytime. Have a wonderful day — goodbye!"
-        goodbye_audio = await text_to_speech_url(goodbye_text)
-        if goodbye_audio:
-            response.play(goodbye_audio)
-        else:
-            response.say(goodbye_text, voice=FALLBACK_VOICE)
-            
+        # Silence fallback (played only if user says nothing during gather timeout)
+        response.say("I'm sorry, I didn't hear anything. Please call back anytime. Goodbye!", voice=FALLBACK_VOICE, language=FALLBACK_LANG)
         response.hangup()
 
     return Response(content=str(response), media_type="application/xml")
