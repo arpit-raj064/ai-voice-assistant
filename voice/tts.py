@@ -87,6 +87,8 @@ def _prepare_text(text: str) -> str:
     return text.strip()
 
 
+ORPHEUS_TERMS_UNACCEPTED = False
+
 # ── MAIN FUNCTION: Convert text to audio URL ─────────────────────────────
 async def text_to_speech_url(
     text:  str,
@@ -95,21 +97,12 @@ async def text_to_speech_url(
     """
     Converts text to speech using Groq Orpheus and returns a public URL.
     Twilio plays this URL to the caller.
-
-    Args:
-        text:  The AI's reply text to speak
-        voice: Voice name (autumn/diana/hannah/austin/daniel/troy)
-
-    Returns:
-        Public URL string to the WAV audio file, or None if failed
-
-    Usage in twilio_handler.py:
-        audio_url = await text_to_speech_url(ai_reply)
-        if audio_url:
-            response.play(audio_url)
-        else:
-            response.say(ai_reply, voice="Polly.Aditi")  # fallback
     """
+    global ORPHEUS_TERMS_UNACCEPTED
+    if ORPHEUS_TERMS_UNACCEPTED:
+        # Fast path: Orpheus model terms unaccepted, instantly fallback to Twilio Polly (0ms latency)
+        return None
+
     if not GROQ_API_KEY:
         logger.warning("[TTS] GROQ_API_KEY not set — cannot generate audio")
         return None
@@ -124,24 +117,16 @@ async def text_to_speech_url(
     if not clean_text:
         return None
 
-    # Truncate if too long (Orpheus works best under 500 chars per request)
+    # Truncate if too long
     if len(clean_text) > 500:
         clean_text = clean_text[:497] + "..."
-        logger.warning("[TTS] Text truncated to 500 chars")
 
     try:
         client = _get_groq_client()
-
-        # Ensure audio directory exists
         AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Unique filename per request
         filename   = f"aria_{int(time.time() * 1000)}.wav"
         audio_path = AUDIO_DIR / filename
 
-        logger.info(f"[TTS] Generating: '{clean_text[:60]}...' voice={voice}")
-
-        # Run sync Groq call in thread pool
         loop = asyncio.get_event_loop()
 
         def _generate():
@@ -149,30 +134,22 @@ async def text_to_speech_url(
                 model           = TTS_MODEL,
                 voice           = voice,
                 input           = clean_text,
-                response_format = "wav",   # WAV format, 48kHz fixed
+                response_format = "wav",
             )
 
         response = await loop.run_in_executor(None, _generate)
-
-        # Save audio file
         audio_path.write_bytes(response.content)
 
-        logger.info(f"[TTS] ✅ Audio saved: {audio_path} ({len(response.content)} bytes)")
-
-        # Return public URL for Twilio to play
         audio_url = f"{PUBLIC_BASE_URL}/static/audio/{filename}"
         return audio_url
 
     except Exception as e:
         err = str(e)
-        logger.error(f"[TTS] Error: {err}")
-
-        # Specific error hints
-        if "rate_limit" in err.lower() or "429" in err:
-            logger.warning("[TTS] Rate limit hit (100/day) — Twilio Polly fallback will be used")
-        elif "model_terms" in err.lower() or "terms" in err.lower():
-            logger.warning("[TTS] Accept model terms at console.groq.com → Playground → Orpheus")
-
+        if "model_terms" in err.lower() or "terms" in err.lower():
+            ORPHEUS_TERMS_UNACCEPTED = True
+            logger.warning("[TTS] Orpheus model terms unaccepted at console.groq.com. Using instant 0ms Twilio Polly fallback.")
+        else:
+            logger.error(f"[TTS] Error: {err}")
         return None
 
 
