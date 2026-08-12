@@ -237,7 +237,7 @@ if __name__ == "__main__":
         print("   Click 'Accept Terms' if prompted. Only needed once.\n")
 
         test_text = (
-            "Hello! Thank you for calling. This is Chinu, your virtual receptionist. "
+            "Hello! Thank you for calling. This is Aria, your virtual receptionist. "
             "Your appointment has been confirmed for Tuesday at 3 PM. "
             "Your booking ID is A-P-T dash 2-8-4-7. "
             "I've also sent you a WhatsApp confirmation. "
