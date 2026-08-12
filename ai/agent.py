@@ -306,7 +306,7 @@ def get_ai_response(conversation_history: list) -> str:
     Returns:
         AI reply string (clean text, ready to speak or print)
     """
-    model_name = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+    model_name = os.getenv("GROQ_LLM_MODEL", "llama-3.1-8b-instant")
     system_prompt = get_system_prompt()
     
     # ── First Groq call — may return a tool call or a direct reply ─────────

@@ -305,7 +305,7 @@ ADAPTIVE (correct):
 
     def get_ai_response(conversation_history: list) -> str:
         response = client.chat.completions.create(
-            model    = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile"),
+            model    = os.getenv("GROQ_LLM_MODEL", "llama-3.1-8b-instant"),
             messages = [
                 {"role": "system", "content": get_system_prompt()},
                 *conversation_history
