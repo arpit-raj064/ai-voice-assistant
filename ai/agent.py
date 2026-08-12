@@ -12,18 +12,10 @@ The difference from chatbot.py's simple fallback:
   - Responses are backed by real database data via Sameer's backend
 """
 
-import os, sys, json
 from groq import Groq
 from dotenv import load_dotenv
-
-# Ensure ai/ directory and project root are in sys.path for IDE and runtime compatibility
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-try:
-    from ai.tools import TOOLS, handle_tool_call
-except ImportError:
-    from tools import TOOLS, handle_tool_call
+import os, json
+from tools import TOOLS, handle_tool_call
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -63,8 +55,10 @@ Example: "Can I get a slot tomorrow at 11?"
 
 In this case:
 1. DO NOT ask for their name or phone yet
-2. Immediately check availability silently using the check_availability tool
-3. Follow STEP 3 below based on the result.
+2. Immediately check availability using the check_availability tool
+3. While checking, say:
+   "Of course! Let me check if that slot is available for you — just a moment."
+4. Then follow STEP 3 below based on the result.
 
 ── CASE B: Caller responds WITHOUT a preferred date or time ───────────────
 Example: "I want to book an appointment"
@@ -75,8 +69,9 @@ In this case:
 1. DO NOT ask for their name or phone yet
 2. First ask for their preferred date and time:
    "I'd be happy to help you with that! Could you please tell me your preferred date and time for the appointment?"
-3. Once they give a date/time, check availability silently using the check_availability tool
-4. Follow STEP 3 below based on the result.
+3. Once they give a date/time, check availability using the check_availability tool
+4. Say while checking: "Let me check that for you — just one moment."
+5. Then follow STEP 3 below based on the result.
 
 ── CASE C: Caller has a query, complaint, or other request ────────────────
 Example: "What are your working hours?"
@@ -174,14 +169,11 @@ cancel_booking          → call this ONLY after verifying booking ID or registe
 reschedule_appointment  → call this ONLY after confirming the new slot is available first
 
 ════════════════════════════════════════
-STRICT RULES — NEVER BREAK THESE
+STRICT RULES — never break these
 ════════════════════════════════════════
-- NEVER mention technical terms or system internals! FORBIDDEN WORDS: "tool", "function", "check_availability", "book_appointment", "cancel_booking", "reschedule_appointment", "API", "database", "backend", "system", "script", "code", "JSON".
-- NEVER explain or mention that a background tool or query is being executed. You are a real human receptionist named Aria, not an AI executing code functions.
-- NEVER output filler phrases like "Let me check the tool for you" or "I am calling check_availability". Invoke tools silently and respond with the natural human outcome.
 - NEVER ask for name or phone before confirming slot availability first
-- NEVER confirm a booking without checking slot availability first
-- NEVER invent or assume slot availability
+- NEVER confirm a booking without calling check_availability first
+- NEVER invent or assume slot availability — always use the tool
 - NEVER ask more than one question per response
 - NEVER repeat the same line twice in a row
 - NEVER make the caller feel rushed or ignored
@@ -253,45 +245,20 @@ Never lose track of what was discussed earlier in the same call.
 
 NON-ADAPTIVE (bad):
   Caller: "Book me for Wednesday, my name is Priya, 9876543210"
-  Aria:    "Sure! May I have your full name?"   ← WRONG — name already given
+  Aria:   "Sure! May I have your full name?"   ← WRONG — name already given
 
 ADAPTIVE (correct):
   Caller: "Book me for Wednesday, my name is Priya, 9876543210"
-  Aria:    "Of course, Priya! And what time would you prefer on Wednesday?"
+  Aria:   "Of course, Priya! And what time would you prefer on Wednesday?"
 
 NON-ADAPTIVE (bad):
   Caller: "I need something urgent"
-  Aria:    "Could you please tell me your preferred date and time?"  ← WRONG
+  Aria:   "Could you please tell me your preferred date and time?"  ← WRONG
 
 ADAPTIVE (correct):
   Caller: "I need something urgent"
-  Aria:    "Understood — let me find the earliest slot available for you right away."
+  Aria:   "Understood — let me find the earliest slot available for you right away."
 """
-
-
-from datetime import datetime, timedelta
-
-def get_system_prompt() -> str:
-    now = datetime.now()
-    today_str = now.strftime("%A, %B %d, %Y")
-    today_iso = now.strftime("%Y-%m-%d")
-    tomorrow_iso = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-    current_year = now.year
-
-    date_context = (
-        f"\n\n════════════════════════════════════════\n"
-        f"CURRENT LIVE SYSTEM TIME & DATE CONTEXT\n"
-        f"════════════════════════════════════════\n"
-        f"- TODAY IS: {today_str}\n"
-        f"- TODAY'S DATE (YYYY-MM-DD): {today_iso}\n"
-        f"- TOMORROW'S DATE (YYYY-MM-DD): {tomorrow_iso}\n"
-        f"- CURRENT YEAR: {current_year}\n\n"
-        f"CRITICAL DATE RESOLUTION RULES:\n"
-        f"1. When resolving relative dates like 'today', 'tomorrow', 'this Friday', or 'next week', ALWAYS calculate them relative to TODAY'S DATE ({today_iso}) and CURRENT YEAR ({current_year}).\n"
-        f"2. NEVER use past years (such as 2024 or 2025) under any circumstances.\n"
-        f"3. When passing date strings to tool calls (check_availability, book_appointment, reschedule_appointment), ALWAYS format as YYYY-MM-DD using year {current_year}.\n"
-    )
-    return SYSTEM_PROMPT + date_context
 
 
 # ── Core function — called by chatbot.py in full agent mode ───────────────
@@ -306,13 +273,12 @@ def get_ai_response(conversation_history: list) -> str:
     Returns:
         AI reply string (clean text, ready to speak or print)
     """
-    model_name = os.getenv("GROQ_LLM_MODEL", "llama-3.1-8b-instant")
-    system_prompt = get_system_prompt()
+    model_name = os.getenv("GROQ_LLM_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     
     # ── First Groq call — may return a tool call or a direct reply ─────────
     response = client.chat.completions.create(
         model        = model_name,
-        messages     = [{"role": "system", "content": system_prompt}]
+        messages     = [{"role": "system", "content": SYSTEM_PROMPT}]
                        + conversation_history,
         tools        = TOOLS,
         tool_choice  = "auto",    # Groq decides when to use a tool
@@ -344,17 +310,11 @@ def get_ai_response(conversation_history: list) -> str:
         # ── Second Groq call — forms the final reply using tool result ─────
         final = client.chat.completions.create(
             model      = model_name,
-            messages   = [{"role": "system", "content": system_prompt}]
+            messages   = [{"role": "system", "content": SYSTEM_PROMPT}]
                          + conversation_history,
             temperature= 0.7,
         )
-        reply = final.choices[0].message.content or ""
-        
-        # Sanitize any accidental internal technical term leaks
-        for term in ["check_availability", "book_appointment", "cancel_booking", "reschedule_appointment"]:
-            reply = reply.replace(f"using the {term} tool", "").replace(f"via {term}", "").replace(term, "")
-            
-        return reply.strip()
+        return final.choices[0].message.content
 
     # ── No tool call — Groq replied directly ──────────────────────────────
-    return message.content.strip() if message.content else ""
+    return message.content

@@ -1,248 +1,278 @@
 """
-voice/tts.py  —  Raunit's file
-================================
-Text-to-Speech using Groq Orpheus v1 English.
+voice/tts.py  —  Raunit's file (migrated to Groq)
+--------------------------------------
+Text-to-Speech module using Groq Orpheus TTS.
 
-Why Groq Orpheus over ElevenLabs/Polly:
-  ✅ Same GROQ_API_KEY — no extra account needed
-  ✅ Completely free (100 requests/day free tier)
-  ✅ Sub-200ms time-to-first-byte
-  ✅ Human-level voice quality (trained on 100k+ hours)
-  ✅ Supports vocal directions: [cheerful], [whisper], [laugh]
-  ✅ 6 professionally trained English voices to choose from
+Available English voices on Groq Orpheus:
+  - autumn (female)
+  - diana (female)
+  - hannah (female)
+  - austin (male)
+  - daniel (male)
+  - troy (male)
 
-Available voices (English):
-  autumn  → warm female (recommended for receptionist)
-  diana   → professional female
-  hannah  → friendly female
-  austin  → calm male
-  daniel  → professional male
-  troy    → energetic male
-
-Vocal direction tags you can use in text:
-  [cheerful]  → upbeat, positive tone
-  [whisper]   → soft, quiet tone
-  [laugh]     → adds a light laugh
-  [sigh]      → adds a sigh sound
-  [sad]       → empathetic, softer tone
-
-Free tier limits:
-  100 requests/day — enough for ~50-100 booking calls/day
-
-Audio output format: WAV (48kHz — Groq Orpheus fixed sample rate)
-
-Test:
-  cd voice
-  python tts.py
+Important notes:
+  - Groq Orpheus supports max 200 characters per request.
+  - To support longer responses, we split text into sentence-based chunks,
+    request audio for each chunk, and concatenate the WAV files.
+  - No external binary dependencies (ffmpeg/pydub) are required for WAV concatenation.
 """
 
 import os
+import re
+import wave
 import time
-import logging
 import asyncio
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Load .env
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
+DEFAULT_VOICE = os.getenv("GROQ_TTS_VOICE", "troy")
 
-# ── Model + voice configuration ───────────────────────────────────────────
-TTS_MODEL = "canopylabs/orpheus-v1-english"   # only English model for now
-TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "autumn")  # change voice in .env if needed
+# Map old ElevenLabs voice names/IDs to Groq Orpheus voices to avoid breaking twilio_handler
+VOICE_IDS = {
+    "rachel":  "diana",
+    "adam":    "troy",
+    "antoni":  "daniel",
+    "default": "troy",
+}
 
-# ── Audio output directory ────────────────────────────────────────────────
-AUDIO_DIR = Path("static/audio")
+VOICES = ["autumn", "diana", "hannah", "austin", "daniel", "troy"]
 
 
 def _get_groq_client():
-    """Returns Groq client."""
+    """Returns Groq client. Imported here to avoid circular imports."""
     from groq import Groq
     return Groq(api_key=GROQ_API_KEY)
 
 
-# ── Prepare text for Orpheus ──────────────────────────────────────────────
-def _prepare_text(text: str) -> str:
+def get_twilio_voice_options() -> dict:
+    """Returns available Twilio TTS voice options for fallback reference."""
+    return {
+        "indian_english_female": "Polly.Aditi",
+        "indian_english_female2": "Polly.Raveena",
+        "generic_english":       "alice",
+        "language_code":         "en-IN",
+        "usage": "gather.say('Your text here', voice='Polly.Aditi', language='en-IN')",
+    }
+
+
+def split_text_into_chunks(text: str, max_chars: int = 180) -> list[str]:
     """
-    Cleans and prepares text for Orpheus TTS.
-
-    - Removes internal flags (##END_CALL##, ##ESCALATE##)
-    - Strips markdown formatting (* _ #)
-    - Optionally adds vocal direction based on content
-
-    Orpheus handles punctuation naturally — periods create pauses,
-    question marks raise pitch. No special handling needed.
+    Splits text into chunks of <= max_chars size along sentence boundaries.
+    If a sentence is too long, splits it along word boundaries.
     """
-    # Remove internal system flags
-    text = text.replace("##END_CALL##", "").replace("##ESCALATE##", "")
+    if not text:
+        return []
+    
+    # Split text into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    chunks = []
+    current_chunk = []
+    current_len = 0
+    
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            # Output current chunk first if any
+            if current_chunk:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+                current_len = 0
+            
+            # Split the long sentence by spaces
+            words = sentence.split(" ")
+            sub_chunk = []
+            sub_len = 0
+            for word in words:
+                if sub_len + len(word) + 1 > max_chars:
+                    if sub_chunk:
+                        chunks.append(" ".join(sub_chunk))
+                    sub_chunk = [word]
+                    sub_len = len(word)
+                else:
+                    sub_chunk.append(word)
+                    sub_len += len(word) + 1
+            if sub_chunk:
+                current_chunk = sub_chunk
+                current_len = sub_len
+        else:
+            if current_len + len(sentence) + (1 if current_chunk else 0) > max_chars:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [sentence]
+                current_len = len(sentence)
+            else:
+                current_chunk.append(sentence)
+                current_len += len(sentence) + (1 if current_chunk else 0)
+                
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+        
+    return chunks
 
-    # Remove markdown formatting (shouldn't be in voice responses but just in case)
-    text = text.replace("**", "").replace("*", "").replace("_", "").replace("#", "")
 
-    # Clean up extra whitespace
-    text = " ".join(text.split())
+def concatenate_wav_files(input_files: list[Path], output_file: Path):
+    """
+    Concatenates a list of WAV files into a single WAV output file.
+    Expects all input WAV files to have identical audio parameters.
+    """
+    if not input_files:
+        return
 
-    return text.strip()
+    with wave.open(str(input_files[0]), 'rb') as first_file:
+        params = first_file.getparams()
+        
+    with wave.open(str(output_file), 'wb') as output_file_obj:
+        output_file_obj.setparams(params)
+        for path in input_files:
+            with wave.open(str(path), 'rb') as wav_file:
+                output_file_obj.writeframes(wav_file.readframes(wav_file.getnframes()))
 
 
-ORPHEUS_TERMS_UNACCEPTED = False
-
-# ── MAIN FUNCTION: Convert text to audio URL ─────────────────────────────
 async def text_to_speech_url(
-    text:  str,
-    voice: str = TTS_VOICE,
+    text:     str,
+    voice_id: str = VOICE_IDS["default"],
 ) -> str | None:
     """
     Converts text to speech using Groq Orpheus and returns a public URL.
-    Twilio plays this URL to the caller.
-    """
-    global ORPHEUS_TERMS_UNACCEPTED
-    if ORPHEUS_TERMS_UNACCEPTED:
-        # Fast path: Orpheus model terms unaccepted, instantly fallback to Twilio Polly (0ms latency)
-        return None
 
+    Args:
+        text:     The text to speak
+        voice_id: Groq voice name (e.g. troy, diana) or ElevenLabs compatible name
+
+    Returns:
+        Public URL string to the audio file, or None if failed
+    """
     if not GROQ_API_KEY:
-        logger.warning("[TTS] GROQ_API_KEY not set — cannot generate audio")
+        logger.warning("[TTS] GROQ_API_KEY not set — falling back to Twilio TTS")
         return None
 
     if not text or not text.strip():
         logger.warning("[TTS] Empty text provided")
         return None
 
-    # Clean the text
-    clean_text = _prepare_text(text)
+    # Resolve voice mapping if legacy ElevenLabs voice ID is passed
+    voice = voice_id.lower()
+    if voice in VOICE_IDS:
+        voice = VOICE_IDS[voice]
+    elif voice not in VOICES:
+        # Check if the voice string itself maps directly
+        found_mapped = False
+        for k, v in VOICE_IDS.items():
+            if k in voice or v in voice:
+                voice = v
+                found_mapped = True
+                break
+        if not found_mapped:
+            voice = DEFAULT_VOICE
 
-    if not clean_text:
+    # Project Root Setup
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    audio_dir = PROJECT_ROOT / "static" / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    chunks = split_text_into_chunks(text)
+    if not chunks:
         return None
 
-    # Truncate if too long
-    if len(clean_text) > 500:
-        clean_text = clean_text[:497] + "..."
+    logger.info(f"[TTS] Generating speech using Groq Orpheus ({voice}) in {len(chunks)} chunks...")
 
     try:
         client = _get_groq_client()
-        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-        filename   = f"aria_{int(time.time() * 1000)}.wav"
-        audio_path = AUDIO_DIR / filename
-
+        temp_files = []
+        timestamp = int(time.time() * 1000)
         loop = asyncio.get_event_loop()
 
-        def _generate():
-            return client.audio.speech.create(
-                model           = TTS_MODEL,
-                voice           = voice,
-                input           = clean_text,
-                response_format = "wav",
+        for idx, chunk in enumerate(chunks):
+            temp_path = audio_dir / f"temp_{timestamp}_{idx}.wav"
+            
+            # Execute the synchronous Groq API call in a thread pool (asyncio-friendly)
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.audio.speech.create(
+                    model=TTS_MODEL,
+                    voice=voice,
+                    input=chunk
+                )
             )
+            
+            # Write WAV content to temp file
+            response.stream_to_file(temp_path)
+            temp_files.append(temp_path)
 
-        response = await loop.run_in_executor(None, _generate)
-        audio_path.write_bytes(response.content)
+        final_filename = f"reply_{timestamp}.wav"
+        final_path = audio_dir / final_filename
 
-        audio_url = f"{PUBLIC_BASE_URL}/static/audio/{filename}"
+        if len(temp_files) == 1:
+            temp_files[0].rename(final_path)
+        else:
+            # Concatenate WAV files
+            concatenate_wav_files(temp_files, final_path)
+            # Cleanup temp files
+            for temp_file in temp_files:
+                if temp_file.exists():
+                    temp_file.unlink()
+
+        logger.info(f"[TTS] Audio saved: {final_path} (from {len(chunks)} chunks)")
+
+        base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+        audio_url = f"{base_url}/static/audio/{final_filename}"
+        logger.info(f"[TTS] Public URL: {audio_url}")
         return audio_url
 
     except Exception as e:
-        err = str(e)
-        if "model_terms" in err.lower() or "terms" in err.lower():
-            ORPHEUS_TERMS_UNACCEPTED = True
-            logger.warning("[TTS] Orpheus model terms unaccepted at console.groq.com. Using instant 0ms Twilio Polly fallback.")
-        else:
-            logger.error(f"[TTS] Error: {err}")
+        logger.error(f"[TTS] Groq Orpheus synthesis failed: {e}")
+        # Cleanup any remaining temp files
+        if 'temp_files' in locals():
+            for temp_file in temp_files:
+                if temp_file.exists():
+                    temp_file.unlink()
         return None
 
 
-# ── Synchronous wrapper (for non-async contexts) ──────────────────────────
-def text_to_speech_url_sync(text: str, voice: str = TTS_VOICE) -> str | None:
-    """
-    Synchronous version of text_to_speech_url.
-    Use this if you're not in an async context.
-    """
-    return asyncio.run(text_to_speech_url(text, voice))
-
-
-# ── Get available voices ──────────────────────────────────────────────────
-def get_available_voices() -> dict:
-    """Returns all available Orpheus English voices with descriptions."""
-    return {
-        "autumn": "Warm female — best for receptionist (recommended)",
-        "diana":  "Professional female — formal tone",
-        "hannah": "Friendly female — casual, approachable",
-        "austin": "Calm male — neutral, clear",
-        "daniel": "Professional male — formal tone",
-        "troy":   "Energetic male — upbeat",
-    }
-
-
-# ── Cleanup old audio files ───────────────────────────────────────────────
 def cleanup_old_audio(max_age_seconds: int = 3600):
-    """Deletes WAV files older than max_age_seconds (default 1 hour)."""
-    if not AUDIO_DIR.exists():
+    """Deletes audio files older than max_age_seconds (default: 1 hour)."""
+    import time
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    audio_dir = PROJECT_ROOT / "static" / "audio"
+    if not audio_dir.exists():
         return
+ 
     now     = time.time()
     deleted = 0
-    for f in AUDIO_DIR.glob("aria_*.wav"):
+    for f in audio_dir.glob("*.wav"):
         if now - f.stat().st_mtime > max_age_seconds:
             f.unlink()
             deleted += 1
+ 
     if deleted:
-        logger.info(f"[TTS] Cleaned up {deleted} old audio files")
+        logger.info(f"[TTS cleanup] Deleted {deleted} old audio files")
 
 
 # ── Quick test ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("\n=== Groq Orpheus TTS Test ===")
-    print(f"API Key set: {'YES ✅' if GROQ_API_KEY else 'NO ❌ — add GROQ_API_KEY to .env'}")
+    print(f"API Key set: {'YES' if GROQ_API_KEY else 'NO — add GROQ_API_KEY to .env!'}")
     print(f"Model:       {TTS_MODEL}")
-    print(f"Voice:       {TTS_VOICE}")
-    print(f"Free limit:  100 requests/day")
-
-    print("\nAvailable voices:")
-    for voice, desc in get_available_voices().items():
-        marker = " ← currently selected" if voice == TTS_VOICE else ""
-        print(f"  {voice:8} — {desc}{marker}")
-
+    print(f"Voice:       {DEFAULT_VOICE}")
+ 
     if not GROQ_API_KEY:
-        print("\nGet a free key at: console.groq.com → API Keys")
-        print("Then add to .env: GROQ_API_KEY=gsk_your-key")
-        print("\nAlso add (optional): GROQ_TTS_VOICE=autumn")
+        print("\nERROR: Set GROQ_API_KEY in .env first.")
     else:
-        # ── IMPORTANT: Accept model terms first ──────────────────────────
-        print("\n⚠️  BEFORE RUNNING: Make sure you accepted Orpheus model terms!")
-        print("   Go to: console.groq.com → Playground → select 'Orpheus English'")
-        print("   Click 'Accept Terms' if prompted. Only needed once.\n")
-
+        # Use a long text to test chunking + concatenation
         test_text = (
-            "Hello! Thank you for calling. This is Aria, your virtual receptionist. "
-            "Your appointment has been confirmed for Tuesday at 3 PM. "
-            "Your booking ID is A-P-T dash 2-8-4-7. "
-            "I've also sent you a WhatsApp confirmation. "
-            "Is there anything else I can help you with today?"
+            "Hello! I am your AI receptionist assistant, powered by Groq Orpheus TTS. "
+            "Your appointment for Tuesday at three PM has been successfully confirmed. "
+            "We look forward to welcoming you to our clinic. Please let us know if you need to reschedule."
         )
-
-        print(f"Generating speech for: '{test_text[:60]}...'")
-        print("Please wait...")
-
-        # Create audio dir for test
-        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-
+        print(f"\nGenerating audio for: '{test_text}'")
         url = asyncio.run(text_to_speech_url(test_text))
-
         if url:
-            print(f"\n✅ SUCCESS!")
-            print(f"Audio URL: {url}")
-            filename = url.split("/")[-1]
-            local_path = AUDIO_DIR / filename
-            print(f"Local file: {local_path}")
-            print(f"\nTo play it (Windows):")
-            print(f"  start {local_path}")
-            print(f"\nTo play it (Mac/Linux):")
-            print(f"  afplay {local_path}  OR  aplay {local_path}")
+            print(f"\nSUCCESS! Audio saved. URL: {url}")
         else:
-            print("\n❌ FAILED")
-            print("Common fixes:")
-            print("  1. Accept Orpheus model terms at console.groq.com")
-            print("  2. Check GROQ_API_KEY in .env")
-            print("  3. Check internet connection")
-            print("  4. Free tier limit: 100 requests/day — may be exhausted")
+            print("\nFAILED — check API key and internet connection.")
