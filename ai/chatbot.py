@@ -40,7 +40,7 @@ if not FULL_AGENT:
 
 
     SYSTEM_PROMPT = """
-You are Aria, a warm and professional AI receptionist assistant handling phone calls on behalf of the clinic/business.
+You are Chinu, a warm and professional AI receptionist assistant handling phone calls on behalf of the clinic/business.
 
 ## Your Personality
 - Friendly, calm, and reassuring — like a real human receptionist
@@ -257,19 +257,19 @@ Never lose track of what was discussed earlier in the same call.
 
 NON-ADAPTIVE (bad):
   Caller: "Book me for Wednesday, my name is Priya, 9876543210"
-  Aria:   "Sure! May I have your full name?"   ← WRONG — name already given
+  Chinu:   "Sure! May I have your full name?"   ← WRONG — name already given
 
 ADAPTIVE (correct):
   Caller: "Book me for Wednesday, my name is Priya, 9876543210"
-  Aria:   "Of course, Priya! And what time would you prefer on Wednesday?"
+  Chinu:   "Of course, Priya! And what time would you prefer on Wednesday?"
 
 NON-ADAPTIVE (bad):
   Caller: "I need something urgent"
-  Aria:   "Could you please tell me your preferred date and time?"  ← WRONG
+  Chinu:   "Could you please tell me your preferred date and time?"  ← WRONG
 
 ADAPTIVE (correct):
   Caller: "I need something urgent"
-  Aria:   "Understood — let me find the earliest slot available for you right away."
+  Chinu:   "Understood — let me find the earliest slot available for you right away."
 
 """
 
@@ -295,7 +295,7 @@ conversation_history = []
 # ── Main chatbot loop ─────────────────────────────────────────────────────
 def main():
     print("\n" + "="*52)
-    print("   AI Voice Receptionist — Aria  (terminal mode)")
+    print("   AI Voice Receptionist — Chinu  (terminal mode)")
     if FULL_AGENT:
         print("   Mode: FULL  — tools + backend connected")
     else:
@@ -303,8 +303,8 @@ def main():
     print("   Type 'quit' to exit | 'clear' to reset chat")
     print("="*52 + "\n")
 
-    print("Aria: Hello! Welcome. I'm Aria, your AI receptionist.")
-    print("Aria: How can I help you today?\n")
+    print("Chinu: Hello! Welcome. I'm Chinu, your AI receptionist.")
+    print("Chinu: How can I help you today?\n")
 
     while True:
         # Get user input
@@ -312,7 +312,7 @@ def main():
             user_input = input("You: ").strip()
         except KeyboardInterrupt:
             # Handle Ctrl+C gracefully
-            print("\n\nAria: Goodbye! Have a great day!")
+            print("\n\nChinu: Goodbye! Have a great day!")
             break
 
         # ── Special commands ──────────────────────────────────────────────
@@ -320,13 +320,13 @@ def main():
             continue
 
         if user_input.lower() in ["quit", "exit", "bye", "q"]:
-            print("\nAria: Thank you for calling. Have a great day! Goodbye!\n")
+            print("\nChinu: Thank you for calling. Have a great day! Goodbye!\n")
             break
 
         if user_input.lower() == "clear":
             conversation_history.clear()
             print("\n[Chat history cleared — starting fresh]\n")
-            print("Aria: Hello again! How can I help you?\n")
+            print("Chinu: Hello again! How can I help you?\n")
             continue
 
         if user_input.lower() == "history":
@@ -344,7 +344,7 @@ def main():
         })
 
         # ── Get AI reply ──────────────────────────────────────────────────
-        print("Aria: ", end="", flush=True)
+        print("Chinu: ", end="", flush=True)
 
         try:
             reply = get_ai_response(conversation_history)
